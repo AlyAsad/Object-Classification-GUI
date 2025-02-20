@@ -15,7 +15,7 @@ DATASET_PATH = "dataset/"
 def CreateWindow():
     app = QApplication(sys.argv)
     window = MainWindow()
-    window.trainClicked.connect(train_function) 
+    window.trainClicked.connect(train_function)
     window.show()
     sys.exit(app.exec_())
     
@@ -54,6 +54,9 @@ def train_function():
     
     print("Training finished!")
     
-    
+
+
+
+
 if __name__ == '__main__':
     CreateWindow()

@@ -2,34 +2,42 @@ import os
 import shutil
 import sys
 from PyQt5.QtWidgets import (
-    QWidget, QTabWidget, QVBoxLayout, QLabel, QGroupBox, QHBoxLayout,
-    QLineEdit, QPushButton, QFileDialog, QMessageBox, QScrollArea
+    QWidget, QTabWidget, QVBoxLayout, QHBoxLayout, QLabel, QGroupBox,
+    QLineEdit, QPushButton, QFileDialog, QMessageBox, QScrollArea, QComboBox,
+    QSizePolicy, QFrame
 )
 from PyQt5.QtGui import QDesktopServices
 from PyQt5.QtCore import QUrl, pyqtSignal, Qt
+import ctypes
+from ctypes import cast, POINTER
+
+sys.path.append("imports/")
+from MvCameraControl_class import *
+
+
 
 class MainWindow(QWidget):
-    # Signal that will be emitted when the Train button is pressed.
+    # Existing signal for training plus new signals for device control
     trainClicked = pyqtSignal()
+    cam = None
+    deviceList = []
 
     def __init__(self):
         super().__init__()
+
         self.setWindowTitle("Object Classification")
         self.resize(800, 600)
         
         # Create the tab widget
         self.tabs = QTabWidget()
         
-        # Setup Training tab with class management features
+        # Setup Training tab
         self.training_tab = QWidget()
         self.setup_training_tab()
         
-        # Setup Classification tab (a simple placeholder)
+        # Setup Classification tab with updated layout
         self.classification_tab = QWidget()
-        classification_layout = QVBoxLayout()
-        classification_label = QLabel("This is the Classification tab.")
-        classification_layout.addWidget(classification_label)
-        self.classification_tab.setLayout(classification_layout)
+        self.setup_classification_tab()
         
         # Add tabs to the tab widget
         self.tabs.addTab(self.training_tab, "Training")
@@ -39,12 +47,11 @@ class MainWindow(QWidget):
         main_layout = QVBoxLayout()
         main_layout.addWidget(self.tabs)
         self.setLayout(main_layout)
-    
+
     def setup_training_tab(self):
-        # Main layout for training tab
+        # [Existing training tab code remains unchanged]
         layout = QVBoxLayout()
         
-        # Create a scrollable area for the classes list.
         self.scroll_area = QScrollArea()
         self.scroll_area.setWidgetResizable(True)
         self.classes_container = QWidget()
@@ -52,15 +59,12 @@ class MainWindow(QWidget):
         self.classes_container.setLayout(self.classes_layout)
         self.scroll_area.setWidget(self.classes_container)
         
-        # Group Box for classes list
         self.classes_group = QGroupBox("Classes List")
         group_layout = QVBoxLayout()
         group_layout.addWidget(self.scroll_area)
         self.classes_group.setLayout(group_layout)
         layout.addWidget(self.classes_group)
         
-        # Management area to add a new class and delete all classes,
-        # with fixed height.
         self.manage_group = QGroupBox("Manage Classes")
         self.manage_group.setFixedHeight(100)
         manage_layout = QHBoxLayout()
@@ -76,7 +80,6 @@ class MainWindow(QWidget):
         self.manage_group.setLayout(manage_layout)
         layout.addWidget(self.manage_group)
         
-        # Train button at the bottom centre.
         train_button_layout = QHBoxLayout()
         train_button_layout.setAlignment(Qt.AlignCenter)
         self.train_button = QPushButton("Train")
@@ -86,46 +89,84 @@ class MainWindow(QWidget):
         
         self.training_tab.setLayout(layout)
         
-        # Ensure the "dataset" folder exists.
         self.dataset_dir = os.path.join(os.getcwd(), "dataset")
         if not os.path.exists(self.dataset_dir):
             os.makedirs(self.dataset_dir)
         
-        # Dictionary to keep track of class widgets: {class_name: widget}
         self.class_widgets = {}
-        
-        # Load preexisting classes from the dataset folder.
         self.load_existing_classes()
-    
+
+    def setup_classification_tab(self):
+        # Create a horizontal layout to split the classification tab into two sections
+        classification_layout = QHBoxLayout()
+        
+        # LEFT SIDE: Contains the device toolbar (dropdown and "Find Devices" button)
+        left_side_layout = QVBoxLayout()
+        device_layout = QHBoxLayout()
+        
+        # Create the dropdown menu and set its size policy to expand horizontally.
+        self.device_dropdown = QComboBox()  # Initially empty
+        self.device_dropdown.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        
+        # Create a smaller "Find Devices" button by setting a fixed width.
+        self.find_devices_button = QPushButton("Find Devices")
+        self.find_devices_button.setFixedWidth(100)  # Adjust width as needed
+        self.find_devices_button.clicked.connect(self.find_devices)
+        
+        # Add widgets to the device layout in the desired order.
+        device_layout.addWidget(self.device_dropdown)
+        device_layout.addWidget(self.find_devices_button)
+        left_side_layout.addLayout(device_layout)
+        left_side_layout.addStretch()
+        
+        # MIDDLE: Add a vertical separator between left and right sections.
+        separator = QFrame()
+        separator.setFrameShape(QFrame.VLine)
+        separator.setFrameShadow(QFrame.Sunken)
+        
+        # RIGHT SIDE: Contains the new device control buttons.
+        right_side_layout = QVBoxLayout()
+        self.open_device_button = QPushButton("Open Device")
+        self.open_device_button.clicked.connect(self.on_open_device)
+        self.close_device_button = QPushButton("Close Device")
+        self.close_device_button.clicked.connect(self.on_close_device)
+        self.close_device_button.setEnabled(False)  # Initially disabled
+        
+        right_side_layout.addWidget(self.open_device_button)
+        right_side_layout.addWidget(self.close_device_button)
+        right_side_layout.addStretch()
+        
+        # Add the left layout, separator, and right layout to the main classification layout.
+        classification_layout.addLayout(left_side_layout, 3)
+        classification_layout.addWidget(separator)
+        classification_layout.addLayout(right_side_layout, 1)
+        
+        self.classification_tab.setLayout(classification_layout)
+
     def load_existing_classes(self):
-        # Scan the dataset directory for subdirectories (each is a class)
         for entry in os.listdir(self.dataset_dir):
             class_folder = os.path.join(self.dataset_dir, entry)
             if os.path.isdir(class_folder):
                 widget = self.create_class_widget(entry, class_folder)
                 self.classes_layout.addWidget(widget)
                 self.class_widgets[entry] = widget
-    
+
     def create_class(self):
-        # Retrieve the class name from input.
         class_name = self.class_name_input.text().strip()
         if not class_name:
             QMessageBox.warning(self, "Input Error", "Please enter a class name.")
             return
-        # Define the folder for this class under the dataset directory.
         class_folder = os.path.join(self.dataset_dir, class_name)
         if os.path.exists(class_folder):
             QMessageBox.warning(self, "Error", f"Class '{class_name}' already exists.")
             return
         os.makedirs(class_folder)
-        # Create a widget representing this class and add it to the layout.
         widget = self.create_class_widget(class_name, class_folder)
         self.classes_layout.addWidget(widget)
         self.class_widgets[class_name] = widget
         self.class_name_input.clear()
-    
+
     def create_class_widget(self, class_name, class_folder):
-        # Create a widget with a horizontal layout for class actions.
         widget = QWidget()
         layout = QHBoxLayout()
         
@@ -145,17 +186,15 @@ class MainWindow(QWidget):
         layout.addWidget(delete_class_button)
         widget.setLayout(layout)
         return widget
-    
+
     def open_folder(self, folder_path):
-        # Open the folder using the default file explorer.
         QDesktopServices.openUrl(QUrl.fromLocalFile(folder_path))
     
     def add_images(self, class_folder):
-        # Open a file dialog for the user to select images to add to the class folder.
         options = QFileDialog.Options()
         files, _ = QFileDialog.getOpenFileNames(
             self, "Select Training Images", "",
-            "Image Files (*.png *.jpg *.jpeg *.bmp);;All Files (*)", options=options
+            "Image Files (.png *.jpg *.jpeg *.bmp);;All Files ()", options=options
         )
         if files:
             for file in files:
@@ -165,9 +204,8 @@ class MainWindow(QWidget):
                     QMessageBox.warning(self, "Error", f"Failed to copy {file}: {str(e)}")
             QMessageBox.information(self, "Images Added",
                                     f"Added {len(files)} images to {os.path.basename(class_folder)}.")
-    
+
     def delete_class(self, class_name, class_folder, widget):
-        # Confirm deletion of the class and its folder.
         reply = QMessageBox.question(
             self, 'Delete Class',
             f"Are you sure you want to delete class '{class_name}' and all its images?",
@@ -179,12 +217,10 @@ class MainWindow(QWidget):
             except Exception as e:
                 QMessageBox.warning(self, "Error", f"Error deleting folder: {str(e)}")
                 return
-            # Remove the widget from the layout and the dictionary.
             widget.setParent(None)
             del self.class_widgets[class_name]
     
     def delete_all_classes(self):
-        # Confirm deletion of all classes.
         reply = QMessageBox.question(
             self, 'Delete All Classes',
             "Are you sure you want to delete ALL classes and their images?",
@@ -202,5 +238,81 @@ class MainWindow(QWidget):
                 del self.class_widgets[class_name]
     
     def handle_train_button(self):
-        # Emit the trainClicked signal when the Train button is pressed.
         self.trainClicked.emit()
+
+    # --- New Device Control Methods ---
+    def on_open_device(self):
+        """Called when the Open Device button is pressed."""
+        selected_index = self.device_dropdown.currentIndex()
+        if selected_index == -1:
+            QMessageBox.warning(self, "No Device Selected", "Please select a device from the dropdown.")
+            return
+
+        stDevice = ctypes.cast(self.deviceList.pDeviceInfo[selected_index], ctypes.POINTER(MV_CC_DEVICE_INFO)).contents
+        # Open the selected camera using its index (modify as needed for your camera API)
+        ret = self.cam.MV_CC_CreateHandle(stDevice)
+
+        if ret != 0:
+            print(f"Failed to create handle! Error code: 0x{ret:X}")
+
+        ret = self.cam.MV_CC_OpenDevice(MV_ACCESS_Exclusive, 0)
+        if ret != 0:
+            print(f"Failed to open device! Error code: 0x{ret:X}")
+            self.cam.MV_CC_DestroyHandle()
+        
+        self.open_device_button.setEnabled(False)
+        self.close_device_button.setEnabled(True)
+        print("Device Opened", f"Camera {selected_index} opened successfully!")
+
+        ret = self.cam.MV_CC_StartGrabbing()
+        if ret != 0:
+            print(f"Failed to start grabbing! Error code: 0x{ret:X}")
+            self.cam.MV_CC_CloseDevice()
+            self.cam.MV_CC_DestroyHandle()
+
+    def on_close_device(self):
+        """Called when the Close Device button is pressed."""
+        self.open_device_button.setEnabled(True)
+        self.close_device_button.setEnabled(False)
+        self.cam.MV_CC_StopGrabbing()
+        self.cam.MV_CC_CloseDevice()
+        self.cam.MV_CC_DestroyHandle()
+        print("Camera resources released.")
+
+
+
+    def decoding_char(self, c_ubyte_value):
+        c_char_p_value = ctypes.cast(c_ubyte_value, ctypes.c_char_p)
+        try:
+            decode_str = c_char_p_value.value.decode('gbk')
+        except UnicodeDecodeError:
+            decode_str = str(c_char_p_value.value)
+        return decode_str
+        
+    def find_devices(self):
+        self.cam = MvCamera()
+        self.cam.MV_CC_Initialize()
+        self.deviceList = MV_CC_DEVICE_INFO_LIST()
+        ret = MvCamera.MV_CC_EnumDevices(MV_GIGE_DEVICE | MV_USB_DEVICE, self.deviceList)
+        self.device_dropdown.clear()
+        if ret != 0:
+            QMessageBox.warning(self, "Error", f"Device enumeration failed! Error code: 0x{ret:X}")
+            return
+        if self.deviceList.nDeviceNum == 0:
+            QMessageBox.information(self, "No Devices", "No camera devices found.")
+            return
+        for i in range(self.deviceList.nDeviceNum):
+            mvcc_dev_info = cast(self.deviceList.pDeviceInfo[i], POINTER(MV_CC_DEVICE_INFO)).contents
+            user_defined_name = self.decoding_char(mvcc_dev_info.SpecialInfo.stUsb3VInfo.chUserDefinedName)
+            model_name = self.decoding_char(mvcc_dev_info.SpecialInfo.stUsb3VInfo.chModelName)
+            print("device user define name: " + user_defined_name)
+            print("device model name: " + model_name)
+            strSerialNumber = ""
+            for per in mvcc_dev_info.SpecialInfo.stUsb3VInfo.chSerialNumber:
+                if per == 0:
+                    break
+                strSerialNumber += chr(per)
+            print("user serial number: " + strSerialNumber)
+            self.device_dropdown.addItem(f"[{i}]USB: {user_defined_name} {model_name} ({strSerialNumber})")
+
+
